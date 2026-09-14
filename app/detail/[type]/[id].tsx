@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { aggregateMeta } from '../../../src/lib/addons/aggregator';
-import { useAddonsStore } from '../../../src/store/addonsStore';
+import { useMeta } from '../../../src/hooks/useMeta';
+import { Video } from '../../../src/lib/addons/types';
 
 function decodeParamId(rawId: string): string {
   try {
@@ -12,24 +13,41 @@ function decodeParamId(rawId: string): string {
   }
 }
 
+interface SeasonGroup {
+  season: number;
+  episodes: Video[];
+}
+
+function groupVideosBySeason(videos: Video[]): SeasonGroup[] {
+  const seasonsMap = new Map<number, Video[]>();
+
+  videos.forEach((video) => {
+    const season = video.season ?? 1;
+    if (!seasonsMap.has(season)) {
+      seasonsMap.set(season, []);
+    }
+    seasonsMap.get(season)!.push(video);
+  });
+
+  return Array.from(seasonsMap.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([season, episodes]) => ({
+      season,
+      episodes: [...episodes].sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0)),
+    }));
+}
+
 export default function DetailScreen() {
   const { type, id } = useLocalSearchParams<{ type: string, id: string }>();
   const router = useRouter();
-  const addons = useAddonsStore((state) => state.addons);
-  const activeAddons = addons.filter(a => a.active);
   const decodedId = decodeParamId(id || '');
 
-  const { data: meta, isLoading, isError } = useQuery({
-    queryKey: ['meta', type, decodedId, activeAddons.map(a => a.manifestUrl)],
-    queryFn: async () => {
-      const result = await aggregateMeta(activeAddons, type, decodedId);
-      if (!result) {
-        throw new Error('Meta not found');
-      }
-      return result;
-    },
-    enabled: activeAddons.length > 0 && !!type && !!decodedId,
-  });
+  const { data: meta, isLoading, isError } = useMeta(type, decodedId);
+
+  const seasons = useMemo(() => groupVideosBySeason(meta?.meta.videos ?? []), [meta]);
+  const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
+  const activeSeason = selectedSeason ?? seasons[0]?.season ?? null;
+  const activeEpisodes = seasons.find((s) => s.season === activeSeason)?.episodes ?? [];
 
   if (isLoading) {
     return (
@@ -62,13 +80,16 @@ export default function DetailScreen() {
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
         <View style={styles.header}>
           {m.background || m.poster ? (
-            <Image 
-              source={{ uri: m.background || m.poster }} 
-              style={styles.backdrop} 
-              resizeMode="cover" 
+            <Image
+              source={{ uri: m.background || m.poster }}
+              style={styles.backdrop}
+              resizeMode="cover"
             />
           ) : null}
-          <View style={styles.overlay} />
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.5)', '#000']}
+            style={styles.overlay}
+          />
         </View>
 
         <SafeAreaView style={styles.content}>
@@ -77,12 +98,18 @@ export default function DetailScreen() {
           </Pressable>
 
           <View style={styles.infoContainer}>
-            <Text style={styles.title}>{m.name}</Text>
-            
-            <View style={styles.metaRow}>
-              {m.releaseInfo && <Text style={styles.metaText}>{m.releaseInfo}</Text>}
-              {m.imdbRating && <Text style={styles.metaText}> ★ {m.imdbRating}</Text>}
-              {m.runtime && <Text style={styles.metaText}> • {m.runtime}</Text>}
+            <View style={styles.titleRow}>
+              {m.poster ? (
+                <Image source={{ uri: m.poster }} style={styles.poster} resizeMode="cover" />
+              ) : null}
+              <View style={styles.titleColumn}>
+                <Text style={styles.title}>{m.name}</Text>
+                <View style={styles.metaRow}>
+                  {m.releaseInfo && <Text style={styles.metaText}>{m.releaseInfo}</Text>}
+                  {m.imdbRating && <Text style={styles.metaText}> ★ {m.imdbRating}</Text>}
+                  {m.runtime && <Text style={styles.metaText}> • {m.runtime}</Text>}
+                </View>
+              </View>
             </View>
 
             <View style={styles.genresRow}>
@@ -97,26 +124,47 @@ export default function DetailScreen() {
               <Text style={styles.description}>{m.description}</Text>
             )}
 
-            {/* If it's a movie, show a single play button */}
+            {/* Si es pelicula, un solo boton de reproduccion */}
             {type === 'movie' && (
-              <Pressable 
+              <Pressable
                 style={({ pressed }) => [
                   styles.playButton,
                   pressed && styles.playButtonPressed
-                ]} 
+                ]}
                 onPress={() => handlePlay()}
               >
-                <Text style={styles.playButtonText}>▶ Play Movie</Text>
+                <Text style={styles.playButtonText}>▶ Ver ahora</Text>
               </Pressable>
             )}
 
-            {/* If it's a series, list episodes (simplified version for MVP) */}
-            {type === 'series' && m.videos && m.videos.length > 0 && (
+            {/* Si es serie, selector de temporada + lista de episodios */}
+            {type === 'series' && seasons.length > 0 && (
               <View style={styles.episodesContainer}>
-                <Text style={styles.sectionTitle}>Episodes</Text>
-                {m.videos.slice(0, 20).map((vid) => ( // limit to 20 for MVP simplicity
-                  <Pressable 
-                    key={vid.id} 
+                <Text style={styles.sectionTitle}>Temporadas</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.seasonSelector}>
+                  {seasons.map((s) => {
+                    const selected = s.season === activeSeason;
+                    return (
+                      <Pressable
+                        key={s.season}
+                        style={({ pressed }) => [
+                          styles.seasonChip,
+                          selected && styles.seasonChipSelected,
+                          pressed && styles.episodeRowPressed,
+                        ]}
+                        onPress={() => setSelectedSeason(s.season)}
+                      >
+                        <Text style={[styles.seasonChipText, selected && styles.seasonChipTextSelected]}>
+                          Temporada {s.season}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+
+                {activeEpisodes.map((vid) => (
+                  <Pressable
+                    key={vid.id}
                     style={({ pressed }) => [
                       styles.episodeRow,
                       pressed && styles.episodeRowPressed
@@ -124,7 +172,7 @@ export default function DetailScreen() {
                     onPress={() => handlePlay(vid.id)}
                   >
                     <Text style={styles.episodeText}>
-                      S{vid.season} E{vid.episode} - {vid.title || `Episode ${vid.episode}`}
+                      S{vid.season ?? activeSeason} E{vid.episode} - {vid.title || `Episodio ${vid.episode}`}
                     </Text>
                   </Pressable>
                 ))}
@@ -211,6 +259,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginBottom: 8,
   },
+  titleRow: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  poster: {
+    width: 90,
+    height: 135,
+    borderRadius: 8,
+    marginRight: 16,
+    backgroundColor: '#222',
+  },
+  titleColumn: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -271,6 +334,31 @@ const styles = StyleSheet.create({
   },
   episodesContainer: {
     marginTop: 16,
+  },
+  seasonSelector: {
+    marginBottom: 12,
+  },
+  seasonChip: {
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: '#2C2C2C',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginRight: 8,
+  },
+  seasonChipSelected: {
+    backgroundColor: '#E6F4FE',
+    borderColor: '#E6F4FE',
+  },
+  seasonChipText: {
+    color: '#ddd',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  seasonChipTextSelected: {
+    color: '#000',
+    fontWeight: '700',
   },
   episodeRow: {
     paddingVertical: 16,

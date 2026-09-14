@@ -21,25 +21,49 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
+          title: 'Inicio',
+        }}
+      />
+      <Tabs.Screen
+        name="movies"
+        options={{
+          title: 'Peliculas',
+        }}
+      />
+      <Tabs.Screen
+        name="series"
+        options={{
+          title: 'Series',
+        }}
+      />
+      <Tabs.Screen
+        name="anime"
+        options={{
+          title: 'Anime',
+        }}
+      />
+      <Tabs.Screen
+        name="addons"
+        options={{
+          title: 'Addons',
         }}
       />
       <Tabs.Screen
         name="search"
         options={{
-          title: 'Search',
+          title: 'Buscar',
         }}
       />
       <Tabs.Screen
         name="library"
         options={{
-          title: 'Library',
+          title: 'Biblioteca',
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
-          title: 'Settings',
+          title: 'Ajustes',
         }}
       />
     </Tabs>

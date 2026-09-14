@@ -72,6 +72,7 @@ export interface Stream {
   url?: string;
   infoHash?: string;
   fileIdx?: number;
+  subtitles?: { id: string; url: string; lang: string }[];
   behaviorHints?: {
     notWebReady?: boolean;
     bingeGroup?: string;

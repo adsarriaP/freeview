@@ -3,7 +3,7 @@ import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput
 import { useAddonsStore } from '../../src/store/addonsStore';
 
 export default function SettingsScreen() {
-  const { addons, addAddon, removeAddon, toggleAddon } = useAddonsStore();
+  const { addons, addAddon, removeAddon, toggleAddon, resetToDefaults } = useAddonsStore();
   const [newAddonUrl, setNewAddonUrl] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
@@ -62,13 +62,35 @@ export default function SettingsScreen() {
                 <View style={styles.addonInfo}>
                   <View style={styles.addonNameRow}>
                     <Text style={styles.addonName}>{addon.name}</Text>
+                    <Text style={styles.addonVersion}>v{addon.version}</Text>
+                  </View>
+                  <Text style={styles.addonUrl} numberOfLines={1}>{addon.manifestUrl}</Text>
+                  {addon.types.length > 0 ? (
+                    <View style={styles.typesRow}>
+                      {addon.types.map((type) => (
+                        <View key={type} style={styles.typeBadge}>
+                          <Text style={styles.typeBadgeText}>{type}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                  <View style={styles.warningsRow}>
                     {addon.behaviorHints?.configurationRequired ? (
                       <View style={styles.warningBadge}>
                         <Text style={styles.warningBadgeText}>Requiere configuracion</Text>
                       </View>
                     ) : null}
+                    {addon.behaviorHints?.p2p ? (
+                      <View style={styles.dangerBadge}>
+                        <Text style={styles.dangerBadgeText}>P2P / Torrent</Text>
+                      </View>
+                    ) : null}
+                    {addon.behaviorHints?.adult ? (
+                      <View style={styles.dangerBadge}>
+                        <Text style={styles.dangerBadgeText}>Contenido adulto</Text>
+                      </View>
+                    ) : null}
                   </View>
-                  <Text style={styles.addonUrl} numberOfLines={1}>{addon.manifestUrl}</Text>
                 </View>
                 <View style={styles.addonActions}>
                   <Pressable 
@@ -96,6 +118,12 @@ export default function SettingsScreen() {
               </View>
             ))
           )}
+          <Pressable
+            style={({ pressed }) => [styles.resetButton, pressed && styles.buttonPressed]}
+            onPress={() => resetToDefaults()}
+          >
+            <Text style={styles.resetButtonText}>Restaurar addons por defecto</Text>
+          </Pressable>
         </View>
         <View style={styles.bottomPadding} />
       </ScrollView>
@@ -190,6 +218,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  addonVersion: {
+    color: '#666',
+    fontSize: 12,
+  },
+  typesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 4,
+  },
+  typeBadge: {
+    backgroundColor: '#222',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  typeBadgeText: {
+    color: '#E6F4FE',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  warningsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 6,
+    gap: 6,
+  },
   warningBadge: {
     backgroundColor: '#382A00',
     borderColor: '#D8A21D',
@@ -200,6 +255,19 @@ const styles = StyleSheet.create({
   },
   warningBadgeText: {
     color: '#F4D27A',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  dangerBadge: {
+    backgroundColor: '#3A1414',
+    borderColor: '#B33A3A',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  dangerBadgeText: {
+    color: '#F4A0A0',
     fontSize: 10,
     fontWeight: '700',
   },
@@ -241,6 +309,19 @@ const styles = StyleSheet.create({
     color: '#ff4444',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  resetButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: '#E6F4FE',
+    fontSize: 14,
+    fontWeight: '600',
   },
   bottomPadding: {
     height: 80,

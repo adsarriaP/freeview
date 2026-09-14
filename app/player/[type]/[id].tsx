@@ -1,9 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
+import { useEvent } from 'expo';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { aggregateStreams } from '../../../src/lib/addons/aggregator';
+import { TVFocusable } from '../../../src/components/tv/TVFocusable';
+import { useStreams } from '../../../src/hooks/useStreams';
 import { supportsResource } from '../../../src/lib/addons/filter';
 import { Stream } from '../../../src/lib/addons/types';
 import { useAddonsStore } from '../../../src/store/addonsStore';
@@ -22,6 +24,16 @@ function decodeParamId(rawId: string): string {
   }
 }
 
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
+  const totalSeconds = Math.floor(seconds);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 export default function PlayerScreen() {
   const { type, id } = useLocalSearchParams<{ type: string, id: string }>();
   const router = useRouter();
@@ -30,14 +42,17 @@ export default function PlayerScreen() {
   const activeStreamAddons = activeAddons.filter((addon) => supportsResource(addon, 'stream'));
   const decodedId = decodeParamId(id || '');
   const [selectedStreamId, setSelectedStreamId] = useState<string | null>(null);
+  const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null);
 
-  const { data: streamGroups, isLoading, isError } = useQuery({
-    queryKey: ['stream', type, decodedId, activeAddons.map(a => a.manifestUrl)],
-    queryFn: async () => {
-      return aggregateStreams(activeAddons, type, decodedId);
-    },
-    enabled: activeAddons.length > 0 && !!type && !!decodedId,
-  });
+  const { data: streamGroups, isLoading, isError } = useStreams(type, decodedId);
+
+  // Fuerza landscape mientras se reproduce, restaura al salir
+  useEffect(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    return () => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    };
+  }, []);
 
   const streamOptions = useMemo<StreamOption[]>(() => {
     if (!streamGroups) {
@@ -63,8 +78,65 @@ export default function PlayerScreen() {
 
   const player = useVideoPlayer(playableSource, (p) => {
     p.loop = false;
+    p.timeUpdateEventInterval = 1;
     p.play();
   });
+
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing });
+  const { currentTime } = useEvent(player, 'timeUpdate', { currentTime: player.currentTime, bufferedPosition: -1, currentLiveTimestamp: null, currentOffsetFromLive: null });
+  const [duration, setDuration] = useState(0);
+
+  useEvent(player, 'sourceLoad', { duration: player.duration, videoSource: null, availableAudioTracks: [], availableSubtitleTracks: [], availableVideoTracks: [] });
+
+  useEffect(() => {
+    if (player.duration > 0) {
+      setDuration(player.duration);
+    }
+  }, [player.duration]);
+
+  // controles se ocultan solos tras 3s de inactividad
+  const [showControls, setShowControls] = useState(true);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleHide = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setShowControls(false), 3000);
+  };
+
+  useEffect(() => {
+    scheduleHide();
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, [selectedStreamId]);
+
+  const handleToggleControls = () => {
+    if (showControls) {
+      setShowControls(false);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    } else {
+      setShowControls(true);
+      scheduleHide();
+    }
+  };
+
+  const [seekBarWidth, setSeekBarWidth] = useState(0);
+
+  const handleSeek = (locationX: number) => {
+    if (!duration || seekBarWidth === 0) return;
+    const ratio = Math.max(0, Math.min(1, locationX / seekBarWidth));
+    player.currentTime = ratio * duration;
+    scheduleHide();
+  };
+
+  const handleTogglePlay = () => {
+    if (player.playing) {
+      player.pause();
+    } else {
+      player.play();
+    }
+    scheduleHide();
+  };
 
   if (isLoading) {
     return (
@@ -98,14 +170,77 @@ export default function PlayerScreen() {
     );
   }
 
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const subtitles = selectedStreamOption?.stream.subtitles ?? [];
+
   return (
     <View style={styles.container}>
       {selectedStreamOption?.stream.url ? (
-        <VideoView
-          style={styles.video}
-          player={player}
-          nativeControls
-        />
+        <Pressable style={styles.videoTouchArea} onPress={handleToggleControls}>
+          <VideoView
+            style={styles.video}
+            player={player}
+            nativeControls={false}
+          />
+
+          {showControls && (
+            <View style={styles.controlsOverlay} pointerEvents="box-none">
+              <SafeAreaView style={styles.topControls}>
+                <TVFocusable style={styles.closeButton} onPress={() => router.back()}>
+                  <Text style={styles.closeButtonText}>✕</Text>
+                </TVFocusable>
+              </SafeAreaView>
+
+              <View style={styles.centerControls}>
+                <TVFocusable style={styles.playPauseButton} onPress={handleTogglePlay}>
+                  <Text style={styles.playPauseButtonText}>{isPlaying ? '⏸' : '▶'}</Text>
+                </TVFocusable>
+              </View>
+
+              <View style={styles.bottomControls}>
+                {subtitles.length > 0 && (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.subtitlesRow}>
+                    <Pressable
+                      style={[styles.subtitleChip, !selectedSubtitleId && styles.subtitleChipSelected]}
+                      onPress={() => setSelectedSubtitleId(null)}
+                    >
+                      <Text style={styles.subtitleChipText}>Sin subtitulos</Text>
+                    </Pressable>
+                    {subtitles.map((sub) => (
+                      <Pressable
+                        key={sub.id}
+                        style={[styles.subtitleChip, selectedSubtitleId === sub.id && styles.subtitleChipSelected]}
+                        onPress={() => setSelectedSubtitleId(sub.id)}
+                      >
+                        <Text style={styles.subtitleChipText}>{sub.lang}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                )}
+                {selectedSubtitleId ? (
+                  <Text style={styles.subtitleDisclaimer}>
+                    Subtitulos externos aun no soportados por el reproductor nativo.
+                  </Text>
+                ) : null}
+
+                <View style={styles.timeRow}>
+                  <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
+                  <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                </View>
+
+                <Pressable
+                  style={styles.seekBarContainer}
+                  onLayout={(e) => setSeekBarWidth(e.nativeEvent.layout.width)}
+                  onPress={(e) => handleSeek(e.nativeEvent.locationX)}
+                >
+                  <View style={styles.seekBarTrack}>
+                    <View style={[styles.seekBarFill, { width: `${progressPercent}%` }]} />
+                  </View>
+                </Pressable>
+              </View>
+            </View>
+          )}
+        </Pressable>
       ) : (
         <View style={styles.selectHintContainer}>
           <Text style={styles.selectHintText}>Selecciona una fuente para comenzar la reproduccion.</Text>
@@ -133,6 +268,7 @@ export default function PlayerScreen() {
                 onPress={() => {
                   if (!isPlayable) return;
                   setSelectedStreamId(option.id);
+                  setSelectedSubtitleId(null);
                 }}
                 disabled={!isPlayable}
               >
@@ -144,13 +280,6 @@ export default function PlayerScreen() {
           })}
         </ScrollView>
       </View>
-      
-      {/* Custom back button overlay */}
-      <SafeAreaView style={styles.overlayContainer}>
-        <Pressable style={styles.closeButton} onPress={() => router.back()}>
-          <Text style={styles.closeButtonText}>✕</Text>
-        </Pressable>
-      </SafeAreaView>
     </View>
   );
 }
@@ -167,10 +296,91 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
-  video: {
+  videoTouchArea: {
     flex: 3,
     width: '100%',
+  },
+  video: {
+    flex: 1,
+    width: '100%',
     height: '100%',
+  },
+  controlsOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    justifyContent: 'space-between',
+  },
+  topControls: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+  },
+  centerControls: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playPauseButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playPauseButtonText: {
+    color: '#fff',
+    fontSize: 28,
+  },
+  bottomControls: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  subtitlesRow: {
+    marginBottom: 6,
+  },
+  subtitleChip: {
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 8,
+  },
+  subtitleChipSelected: {
+    backgroundColor: '#E6F4FE',
+  },
+  subtitleChipText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  subtitleDisclaimer: {
+    color: '#ccc',
+    fontSize: 11,
+    marginBottom: 6,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  timeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  seekBarContainer: {
+    width: '100%',
+    paddingVertical: 8,
+  },
+  seekBarTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    overflow: 'hidden',
+  },
+  seekBarFill: {
+    height: '100%',
+    backgroundColor: '#E6F4FE',
   },
   selectHintContainer: {
     flex: 3,
@@ -271,24 +481,14 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
   },
-  overlayContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    pointerEvents: 'box-none',
-  },
   closeButton: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
     width: 40,
     height: 40,
     borderRadius: 20,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    margin: 12,
   },
   closeButtonText: {
     color: '#fff',

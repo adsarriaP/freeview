@@ -32,6 +32,7 @@ interface AddonsState {
   removeAddon: (url: string) => void;
   toggleAddon: (url: string) => void;
   getActiveAddons: () => Addon[];
+  resetToDefaults: () => void;
 }
 
 // Default public domain addon (Cinemeta is usually default for Stremio, 
@@ -103,6 +104,20 @@ function normalizeAddon(url: string, manifest: AddonManifest): Addon {
   };
 }
 
+function isValidAddonShape(addon: unknown): addon is Addon {
+  if (!addon || typeof addon !== 'object') {
+    return false;
+  }
+
+  const candidate = addon as Partial<Addon>;
+  return (
+    typeof candidate.manifestUrl === 'string' &&
+    Array.isArray(candidate.resources) &&
+    candidate.resources.length > 0 &&
+    Array.isArray(candidate.catalogs)
+  );
+}
+
 export const useAddonsStore = create<AddonsState>()(
   persist(
     (set, get) => ({
@@ -137,19 +152,23 @@ export const useAddonsStore = create<AddonsState>()(
       },
       getActiveAddons: () => {
         return get().addons.filter(a => a.active);
+      },
+      resetToDefaults: () => {
+        // reemplaza cualquier entrada corrupta/desactualizada por los addons validos por defecto
+        set({ addons: DEFAULT_ADDONS });
       }
     }),
     {
       name: 'freeview-addons-storage',
       storage: createJSONStorage(() => AsyncStorage),
-      version: 2,
+      version: 3,
       migrate: (persistedState, version) => {
-        if (!persistedState || version < 2) {
+        if (!persistedState || version < 3) {
           return { addons: DEFAULT_ADDONS };
         }
 
         const state = persistedState as PersistedAddonsState;
-        if (!Array.isArray(state.addons)) {
+        if (!Array.isArray(state.addons) || state.addons.length === 0 || !state.addons.every(isValidAddonShape)) {
           return { addons: DEFAULT_ADDONS };
         }
 

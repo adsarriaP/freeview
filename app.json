@@ -31,7 +31,13 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "FreeView",
+      "shortName": "FreeView",
+      "description": "Agregador de addons del protocolo abierto de Stremio. FreeView no incluye contenido propio.",
+      "themeColor": "#000000",
+      "backgroundColor": "#000000",
+      "display": "standalone"
     },
     "plugins": [
       "expo-router",

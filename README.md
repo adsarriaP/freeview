@@ -1,70 +1,101 @@
 # FreeView
 
-FreeView is a multi-platform React Native streaming aggregator app built with Expo.
-It runs on a single codebase across Android (Mobile), Android TV, and Web (PWA).
+FreeView es una app de React Native + Expo que funciona como agregador de addons del
+protocolo abierto de Stremio. Corre desde un unico codigo fuente en Android (movil),
+Android TV y Web (PWA instalable).
 
-## Features (MVP)
-- **Stremio Addon Protocol**: Full integration with community HTTP/JSON addons.
-- **Aggregated Catalogs**: Unified home screen merging content from all active addons.
-- **Search**: Cross-addon search functionality.
-- **Dynamic Meta Details**: Posters, backdrops, genres, descriptions, and episode selection.
-- **Video Player**: Native Expo Video player for MP4 and HLS streams.
-- **TV Support**: Fully D-pad navigable and optimized layout for Android TV / Apple TV.
+**Aviso legal**: FreeView no incluye, distribuye ni aloja ningun contenido audiovisual
+propio. Es un cliente/agregador del protocolo abierto de Stremio: unicamente consume
+addons de terceros (instalados por el usuario) que exponen catalogos, metadatos y
+enlaces de streams via HTTP/JSON. El uso de addons especificos y el contenido al que
+accedan es responsabilidad exclusiva del usuario.
+
+## Funcionalidades
+
+- **Protocolo de addons Stremio**: cliente completo (manifest, catalog, meta, stream)
+  con filtrado real por `resources`, `types` e `idPrefixes` declarados en cada manifest.
+- **Explorar addons**: catalogo de addons de la comunidad con busqueda, filtros por
+  categoria (Peliculas, Series, Anime, IPTV/TV, Subtitulos, Otros) e instalacion con un
+  toque, ademas de un formulario para agregar addons manualmente por URL.
+- **Catalogos por categoria**: tabs dedicados de Inicio, Peliculas, Series y Anime,
+  generados dinamicamente a partir de los catalogos que cada addon declara en su
+  manifest (sin IDs de catalogo hardcodeados).
+- **Busqueda**: busqueda cruzada entre addons, solo en catalogos que declaran soporte
+  de `search`.
+- **Detalle**: backdrop con gradiente, poster, genero, sinopsis, rating; para series,
+  selector de temporada y episodios agrupados.
+- **Reproductor**: expo-video con seleccion de fuente (varios addons), controles
+  personalizados (play/pausa, barra de progreso con seek, tiempos), orientacion forzada
+  a landscape, y manejo de streams torrent (`infoHash`) como no reproducibles sin
+  servidor de streaming.
+- **Ajustes**: gestion de addons instalados (activar/desactivar/eliminar), version y
+  tipos de cada uno, y advertencias visibles si el addon requiere configuracion, usa
+  P2P/torrents o contiene contenido para adultos.
+- **Soporte TV**: navegacion por D-pad en catalogos, tarjetas y controles del
+  reproductor, con estilos de foco visibles en Android TV / Apple TV.
 
 ## Como funciona el consumo de addons
 
 FreeView consume addons siguiendo el manifiesto de Stremio como fuente de verdad:
 
-- Primero descarga `manifest.json` y guarda el manifiesto completo del addon (resources, types, catalogs, idPrefixes y behaviorHints).
-- Antes de cada request, filtra por compatibilidad real del addon:
+- Al instalar un addon se descarga su `manifest.json` completo y se guarda tal cual
+  (resources, types, catalogs con sus `extra`, idPrefixes y behaviorHints).
+- Antes de cada request, se filtra por compatibilidad real del addon (`src/lib/addons/filter.ts`):
 	- `supportsResource`: valida si el addon declara `catalog`, `meta`, `stream` o `subtitles`.
-	- `supportsType`: valida si el addon acepta el `type` solicitado (movie, series, etc.).
+	- `supportsType`: valida si el addon acepta el `type` solicitado (movie, series, anime, etc.).
 	- `supportsId`: valida `idPrefixes` del manifiesto o del resource para evitar requests imposibles.
-- Home solo consulta catalogs compatibles y maneja `extra` requeridos del catalog (por ejemplo `genre`) antes de hacer fetch.
-- Search no usa IDs hardcodeados: solo consulta catalogs que declaran `extra: search`.
-- Detail usa agregacion de `meta` filtrada por manifest para reducir errores y latencia.
-- Player consulta streams solo en addons compatibles y permite elegir fuente. Los streams torrent (`infoHash`) se muestran como no reproducibles sin servidor.
+- Los tabs de Inicio/Peliculas/Series/Anime solo consultan catalogos compatibles y
+  respetan los `extra` requeridos (por ejemplo `genre`) antes de hacer fetch.
+- Busqueda no usa IDs hardcodeados: solo consulta catalogs que declaran `extra: search`.
+- Detalle usa agregacion de `meta` (`useMeta`) filtrada por manifest para reducir
+  errores y latencia.
+- Reproductor consulta streams (`useStreams`) solo en addons compatibles y permite
+  elegir fuente entre todas las respuestas.
 
-Este enfoque evita 404/400 por supuestos incorrectos y mantiene aislados los fallos por addon (si uno falla, los demas siguen respondiendo).
+Este enfoque evita errores 404/400 por supuestos incorrectos y aisla los fallos por
+addon: si uno esta caido o es lento, los demas siguen respondiendo con normalidad.
 
-## Prerequisites
+## Requisitos previos
 
 - Node.js 20+
 - EAS CLI (`npm install -g eas-cli`)
-- Java / Android Studio (for local emulator testing)
+- Java / Android Studio (para pruebas locales en emulador)
 
-## Getting Started
+## Como correr en desarrollo
 
-1. Clone and install dependencies:
+1. Instalar dependencias:
 ```bash
 npm install
 ```
 
-2. Start the Expo development server:
+2. Iniciar el servidor de desarrollo de Expo:
 ```bash
 npx expo start
 ```
-From here you can press `a` to open Android, or `w` to open the Web preview.
+Desde ahi se puede presionar `a` para abrir Android, o `w` para la vista previa Web.
 
-## Building for Production
+## Generar builds
 
-### Android (Mobile APK)
-To build an APK tailored for mobile devices:
+### Android (APK movil)
+Para generar un APK orientado a moviles:
 ```bash
 eas build -p android --profile apk-dev
 ```
 
-### Android TV (TV APK)
-To build an APK tailored for Android TV (includes Leanback launcher intent and TV focus features):
+### Android TV (APK TV)
+Para generar un APK orientado a Android TV (incluye el intent de Leanback launcher y
+navegacion por D-pad):
 ```bash
 eas build -p android --profile apk-tv
 ```
 
 ### Web (PWA)
-To export a static web build that can be hosted anywhere (Vercel, Netlify, GitHub Pages):
+Para exportar un build estatico de web, instalable como PWA, que se puede alojar en
+cualquier lado (Vercel, Netlify, GitHub Pages):
 ```bash
 npx expo export -p web
 ```
 
-## License
+## Licencia
 GPL-3.0
+

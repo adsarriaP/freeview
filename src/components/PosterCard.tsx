@@ -1,7 +1,7 @@
-import React from 'react';
-import { View, Text, Image, StyleSheet, Pressable, Platform } from 'react-native';
-import { MetaPreview } from '../lib/addons/types';
 import { useRouter } from 'expo-router';
+import { Image, StyleSheet, Text, View } from 'react-native';
+import { MetaPreview } from '../lib/addons/types';
+import { TVFocusable } from './tv/TVFocusable';
 
 interface PosterCardProps {
   meta: MetaPreview;
@@ -15,7 +15,7 @@ export function PosterCard({ meta }: PosterCardProps) {
   };
 
   return (
-    <Pressable
+    <TVFocusable
       onPress={handlePress}
       style={({ pressed }) => [
         styles.container,
@@ -39,7 +39,7 @@ export function PosterCard({ meta }: PosterCardProps) {
           {meta.releaseInfo}
         </Text>
       )}
-    </Pressable>
+    </TVFocusable>
   );
 }
 
