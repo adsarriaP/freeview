@@ -1,14 +1,29 @@
-import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { fetchManifest } from '../lib/addons/client';
+import { AddonCatalog, AddonManifest } from '../lib/addons/types';
 
 export interface Addon {
   manifestUrl: string;
+  id: string;
   name: string;
   version: string;
-  catalogs: { id: string; type: string; name: string }[];
+  types: string[];
+  resources: Array<string | { name: string; types: string[]; idPrefixes?: string[] }>;
+  idPrefixes?: string[];
+  catalogs: AddonCatalog[];
+  behaviorHints?: {
+    adult?: boolean;
+    p2p?: boolean;
+    configurable?: boolean;
+    configurationRequired?: boolean;
+  };
   active: boolean;
+}
+
+interface PersistedAddonsState {
+  addons: Addon[];
 }
 
 interface AddonsState {
@@ -24,15 +39,69 @@ interface AddonsState {
 const DEFAULT_ADDONS: Addon[] = [
   {
     manifestUrl: 'https://v3-cinemeta.strem.io/manifest.json',
+    id: 'org.cinemeta',
     name: 'Cinemeta',
     version: '3.0.0',
+    types: ['movie', 'series'],
+    resources: ['catalog', 'meta'],
+    idPrefixes: ['tt'],
     catalogs: [
-      { id: 'top', type: 'movie', name: 'Top Movies' },
-      { id: 'top', type: 'series', name: 'Top Series' }
+      {
+        id: 'top',
+        type: 'movie',
+        name: 'Top Movies',
+        extra: [{ name: 'search' }],
+      },
+      {
+        id: 'top',
+        type: 'series',
+        name: 'Top Series',
+        extra: [{ name: 'search' }],
+      }
     ],
+    behaviorHints: {
+      configurable: false,
+      configurationRequired: false,
+      adult: false,
+      p2p: false,
+    },
     active: true
   }
 ];
+
+function isValidResourceEntry(
+  resource: string | { name: string; types: string[]; idPrefixes?: string[] }
+): boolean {
+  if (typeof resource === 'string') {
+    return resource.length > 0;
+  }
+
+  return (
+    !!resource.name &&
+    Array.isArray(resource.types) &&
+    resource.types.every((entry) => typeof entry === 'string' && entry.length > 0)
+  );
+}
+
+function normalizeAddon(url: string, manifest: AddonManifest): Addon {
+  return {
+    manifestUrl: url,
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    types: manifest.types ?? [],
+    resources: (manifest.resources ?? []).filter(isValidResourceEntry),
+    idPrefixes: manifest.idPrefixes,
+    catalogs: (manifest.catalogs ?? []).map((catalog) => ({
+      id: catalog.id,
+      type: catalog.type,
+      name: catalog.name || catalog.id,
+      extra: catalog.extra,
+    })),
+    behaviorHints: manifest.behaviorHints,
+    active: true,
+  };
+}
 
 export const useAddonsStore = create<AddonsState>()(
   persist(
@@ -41,18 +110,11 @@ export const useAddonsStore = create<AddonsState>()(
       addAddon: async (url: string) => {
         // Fetch manifest to get details
         const manifest = await fetchManifest(url);
-        
-        const newAddon: Addon = {
-          manifestUrl: url,
-          name: manifest.name,
-          version: manifest.version,
-          catalogs: manifest.catalogs.map(c => ({
-            id: c.id,
-            type: c.type,
-            name: c.name || c.id,
-          })),
-          active: true,
-        };
+
+        const newAddon = normalizeAddon(url, manifest);
+        if (newAddon.resources.length === 0) {
+          throw new Error('El manifest no declara resources validos para el protocolo de Stremio.');
+        }
 
         set((state) => {
           // Check if already exists
@@ -80,6 +142,19 @@ export const useAddonsStore = create<AddonsState>()(
     {
       name: 'freeview-addons-storage',
       storage: createJSONStorage(() => AsyncStorage),
+      version: 2,
+      migrate: (persistedState, version) => {
+        if (!persistedState || version < 2) {
+          return { addons: DEFAULT_ADDONS };
+        }
+
+        const state = persistedState as PersistedAddonsState;
+        if (!Array.isArray(state.addons)) {
+          return { addons: DEFAULT_ADDONS };
+        }
+
+        return state;
+      },
     }
   )
 );

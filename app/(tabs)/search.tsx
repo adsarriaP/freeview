@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, SafeAreaView, ScrollView, ActivityIndicator } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { useAddonsStore } from '../../src/store/addonsStore';
-import { aggregateCatalogs } from '../../src/lib/addons/aggregator';
+import { useState } from 'react';
+import { ActivityIndicator, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Row } from '../../src/components/Row';
 import { useDebounce } from '../../src/hooks/useDebounce';
+import { fetchCatalog } from '../../src/lib/addons/client';
+import { supportsResource, supportsType } from '../../src/lib/addons/filter';
+import { MetaPreview } from '../../src/lib/addons/types';
+import { useAddonsStore } from '../../src/store/addonsStore';
 
 function SearchResults({ query }: { query: string }) {
   const addons = useAddonsStore((state) => state.addons);
@@ -13,18 +15,45 @@ function SearchResults({ query }: { query: string }) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['search', query, activeAddons.map(a => a.manifestUrl)],
     queryFn: async () => {
-      // Find catalogs that support search
-      const results = [];
+      const catalogRequests: Array<Promise<{ title: string; metas: MetaPreview[] } | null>> = [];
+
       for (const addon of activeAddons) {
-        // Typically cinemeta uses catalog id 'top' with extra 'search'
-        // For a generalized approach, we just try to fetch from all movie/series catalogs with extra={search: query}
-        const movieResults = await aggregateCatalogs([addon], 'movie', 'top', { search: query });
-        const seriesResults = await aggregateCatalogs([addon], 'series', 'top', { search: query });
-        
-        results.push(...movieResults);
-        results.push(...seriesResults);
+        if (!supportsResource(addon, 'catalog')) {
+          continue;
+        }
+
+        for (const catalog of addon.catalogs) {
+          const searchExtra = catalog.extra?.find((extraEntry) => extraEntry.name === 'search');
+          if (!searchExtra) {
+            continue;
+          }
+
+          if (!supportsType(addon, 'catalog', catalog.type)) {
+            continue;
+          }
+
+          catalogRequests.push(
+            fetchCatalog(addon.manifestUrl, catalog.type, catalog.id, { search: query })
+              .then((response) => {
+                if (!response?.metas || response.metas.length === 0) {
+                  return null;
+                }
+
+                return {
+                  title: `${addon.name} - ${catalog.name || catalog.id}`,
+                  metas: response.metas,
+                };
+              })
+              .catch((error) => {
+                console.warn(`Failed to search on ${addon.name} / ${catalog.id}`, error);
+                return null;
+              })
+          );
+        }
       }
-      return results;
+
+      const results = await Promise.all(catalogRequests);
+      return results.filter((entry): entry is { title: string; metas: MetaPreview[] } => entry !== null);
     },
     enabled: query.length > 2 && activeAddons.length > 0,
   });
@@ -45,9 +74,9 @@ function SearchResults({ query }: { query: string }) {
     <View>
       {data.map((result, index) => (
         <Row 
-          key={`${result.addonName}-${index}`} 
-          title={`Results from ${result.addonName}`} 
-          data={result.metas} 
+          key={`${result.title}-${index}`} 
+          title={result.title} 
+          data={result.metas}
         />
       ))}
     </View>

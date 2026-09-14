@@ -1,33 +1,34 @@
-import React from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, ActivityIndicator, Pressable, Platform, SafeAreaView } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { fetchMeta } from '../../../src/lib/addons/client';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ActivityIndicator, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { aggregateMeta } from '../../../src/lib/addons/aggregator';
 import { useAddonsStore } from '../../../src/store/addonsStore';
+
+function decodeParamId(rawId: string): string {
+  try {
+    return decodeURIComponent(rawId);
+  } catch {
+    return rawId;
+  }
+}
 
 export default function DetailScreen() {
   const { type, id } = useLocalSearchParams<{ type: string, id: string }>();
   const router = useRouter();
   const addons = useAddonsStore((state) => state.addons);
   const activeAddons = addons.filter(a => a.active);
+  const decodedId = decodeParamId(id || '');
 
   const { data: meta, isLoading, isError } = useQuery({
-    queryKey: ['meta', type, id, activeAddons.map(a => a.manifestUrl)],
+    queryKey: ['meta', type, decodedId, activeAddons.map(a => a.manifestUrl)],
     queryFn: async () => {
-      // Find the first addon that provides this meta
-      for (const addon of activeAddons) {
-        try {
-          const response = await fetchMeta(addon.manifestUrl, type, id);
-          if (response && response.meta) {
-            return { meta: response.meta, addonUrl: addon.manifestUrl };
-          }
-        } catch (e) {
-          // ignore and try next
-        }
+      const result = await aggregateMeta(activeAddons, type, decodedId);
+      if (!result) {
+        throw new Error('Meta not found');
       }
-      throw new Error('Meta not found');
+      return result;
     },
-    enabled: activeAddons.length > 0,
+    enabled: activeAddons.length > 0 && !!type && !!decodedId,
   });
 
   if (isLoading) {
@@ -53,7 +54,7 @@ export default function DetailScreen() {
 
   const handlePlay = (videoId?: string) => {
     // Navigate to player with the specific video ID or just the meta ID
-    router.push(`/player/${type}/${encodeURIComponent(videoId || id)}`);
+    router.push(`/player/${type}/${encodeURIComponent(videoId || decodedId)}`);
   };
 
   return (

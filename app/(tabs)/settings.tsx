@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TextInput, Pressable, Alert } from 'react-native';
+import { useState } from 'react';
+import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useAddonsStore } from '../../src/store/addonsStore';
-import { fetchManifest } from '../../src/lib/addons/client';
 
 export default function SettingsScreen() {
   const { addons, addAddon, removeAddon, toggleAddon } = useAddonsStore();
@@ -14,8 +13,9 @@ export default function SettingsScreen() {
     try {
       await addAddon(newAddonUrl);
       setNewAddonUrl('');
-    } catch (e: any) {
-      Alert.alert('Error adding addon', e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'No se pudo instalar el addon.';
+      Alert.alert('Error adding addon', message);
     } finally {
       setIsAdding(false);
     }
@@ -60,7 +60,14 @@ export default function SettingsScreen() {
             addons.map((addon) => (
               <View key={addon.manifestUrl} style={styles.addonItem}>
                 <View style={styles.addonInfo}>
-                  <Text style={styles.addonName}>{addon.name}</Text>
+                  <View style={styles.addonNameRow}>
+                    <Text style={styles.addonName}>{addon.name}</Text>
+                    {addon.behaviorHints?.configurationRequired ? (
+                      <View style={styles.warningBadge}>
+                        <Text style={styles.warningBadgeText}>Requiere configuracion</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <Text style={styles.addonUrl} numberOfLines={1}>{addon.manifestUrl}</Text>
                 </View>
                 <View style={styles.addonActions}>
@@ -172,10 +179,29 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 12,
   },
+  addonNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   addonName: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  warningBadge: {
+    backgroundColor: '#382A00',
+    borderColor: '#D8A21D',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  warningBadgeText: {
+    color: '#F4D27A',
+    fontSize: 10,
+    fontWeight: '700',
   },
   addonUrl: {
     color: '#666',

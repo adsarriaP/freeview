@@ -11,6 +11,22 @@ It runs on a single codebase across Android (Mobile), Android TV, and Web (PWA).
 - **Video Player**: Native Expo Video player for MP4 and HLS streams.
 - **TV Support**: Fully D-pad navigable and optimized layout for Android TV / Apple TV.
 
+## Como funciona el consumo de addons
+
+FreeView consume addons siguiendo el manifiesto de Stremio como fuente de verdad:
+
+- Primero descarga `manifest.json` y guarda el manifiesto completo del addon (resources, types, catalogs, idPrefixes y behaviorHints).
+- Antes de cada request, filtra por compatibilidad real del addon:
+	- `supportsResource`: valida si el addon declara `catalog`, `meta`, `stream` o `subtitles`.
+	- `supportsType`: valida si el addon acepta el `type` solicitado (movie, series, etc.).
+	- `supportsId`: valida `idPrefixes` del manifiesto o del resource para evitar requests imposibles.
+- Home solo consulta catalogs compatibles y maneja `extra` requeridos del catalog (por ejemplo `genre`) antes de hacer fetch.
+- Search no usa IDs hardcodeados: solo consulta catalogs que declaran `extra: search`.
+- Detail usa agregacion de `meta` filtrada por manifest para reducir errores y latencia.
+- Player consulta streams solo en addons compatibles y permite elegir fuente. Los streams torrent (`infoHash`) se muestran como no reproducibles sin servidor.
+
+Este enfoque evita 404/400 por supuestos incorrectos y mantiene aislados los fallos por addon (si uno falla, los demas siguen respondiendo).
+
 ## Prerequisites
 
 - Node.js 20+
