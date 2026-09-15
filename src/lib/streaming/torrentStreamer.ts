@@ -7,7 +7,9 @@
  */
 
 import { Platform } from 'react-native';
+import { isStreamWishUrl } from '../../../constants/streamWishDomains';
 import { Stream } from '../addons/types';
+import { resolveEmbedStream } from './embedResolver';
 import { releaseActiveTorrent, resolveViaTorrent } from './webtorrentResolver';
 
 // --- Tipos publicos ---
@@ -32,6 +34,7 @@ export interface StreamResolutionError {
 /** Detecta si una URL corresponde a un servicio de video embed (Streamwish, Filemoon, etc.) */
 export function isEmbedStreamUrl(url?: string | null): boolean {
   if (!url) return false;
+  if (isStreamWishUrl(url)) return true;
   const lower = url.toLowerCase();
   return (
     lower.includes('streamwish.') ||
@@ -74,6 +77,7 @@ export function formatSize(bytes?: number): string | null {
 /**
  * Resuelve un Stream a una URL reproducible.
  * - HTTP directo o Embed: resuelve inmediatamente.
+ * - En web con Embed: extrae el stream m3u8 con resolveEmbedStream.
  * - Torrent en web: usa WebTorrent (puede tardar 5-30s conectando peers).
  * - Torrent en nativo: rechaza con isPlatformLimit = true.
  *
@@ -83,6 +87,9 @@ export async function resolveStreamUrl(stream: Stream): Promise<ResolvedStream> 
   // HTTP directo o Embed
   if (stream.url) {
     const kind = isEmbedStreamUrl(stream.url) ? 'embed' : 'http';
+    if (kind === 'embed' && Platform.OS === 'web') {
+      return await resolveEmbedStream(stream);
+    }
     return { url: stream.url, kind };
   }
 

@@ -43,6 +43,17 @@ function formatTime(seconds: number): string {
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+function isHlsUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return url.toLowerCase().includes('.m3u8') || url.includes('/api/proxy');
+}
+
+function canPlayHlsNatively(): boolean {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return true;
+  const v = document.createElement('video');
+  return Boolean(v.canPlayType('application/vnd.apple.mpegurl'));
+}
+
 export default function PlayerScreen() {
   const { type, id } = useLocalSearchParams<{ type: string, id: string }>();
   const router = useRouter();
@@ -61,8 +72,12 @@ export default function PlayerScreen() {
   const [resolveError, setResolveError] = useState<StreamResolutionError | null>(null);
   // URL resuelta lista para pasarle al reproductor
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  // Flag para fallback a iframe cuando falla la extracción directa de embed
+  const [isIframeFallback, setIsIframeFallback] = useState(false);
   // infoHash activo para liberar el torrent al desmontar o cambiar fuente
   const activeInfoHashRef = useRef<string | null>(null);
+  const videoContainerRef = useRef<View | null>(null);
+  const hlsRef = useRef<any>(null);
 
   const { data: streamGroups, isLoading, isError } = useStreams(type, decodedId);
 
@@ -74,19 +89,43 @@ export default function PlayerScreen() {
     };
   }, []);
 
-  const streamOptions = useMemo<StreamOption[]>(() => {
-    if (!streamGroups) return [];
+  const { streamOptions, hiddenTorrentsCount } = useMemo(() => {
+    if (!streamGroups) return { streamOptions: [] as StreamOption[], hiddenTorrentsCount: 0 };
 
-    return streamGroups.flatMap((group, groupIndex) =>
+    let torrentsCount = 0;
+
+    const all = streamGroups.flatMap((group, groupIndex) =>
       group.streams
         // En web, ocultar fuentes marcadas como notWebReady
         .filter((stream) => !(Platform.OS === 'web' && stream.behaviorHints?.notWebReady))
+        .filter((stream) => {
+          if (Platform.OS === 'web') {
+            const kind = getStreamKind(stream);
+            if (kind === 'torrent') {
+              torrentsCount++;
+              return false;
+            }
+            return kind === 'embed' || kind === 'http';
+          }
+          return true;
+        })
         .map((stream, streamIndex) => ({
           id: `${group.addonName}-${groupIndex}-${streamIndex}`,
           addonName: group.addonName,
           stream,
         }))
     );
+
+    // En web, colocar arriba las fuentes que funcionan en navegador (HTTP directo y Embeds)
+    if (Platform.OS === 'web') {
+      all.sort((a, b) => {
+        const aDirect = !!a.stream.url ? 1 : 0;
+        const bDirect = !!b.stream.url ? 1 : 0;
+        return bDirect - aDirect;
+      });
+    }
+
+    return { streamOptions: all, hiddenTorrentsCount: torrentsCount };
   }, [streamGroups]);
 
   const selectedStreamOption = streamOptions.find((option) => option.id === selectedStreamId) ?? null;
@@ -103,17 +142,41 @@ export default function PlayerScreen() {
     setSelectedSubtitleId(null);
     setResolvedUrl(null);
     setResolveError(null);
+    setIsIframeFallback(false);
+
+    // En web, si es un torrent puro sin URL directa, informar inmediatamente
+    // en lugar de esperar 30s a que WebTorrent falle por falta de WebRTC
+    if (Platform.OS === 'web' && stream.infoHash && !stream.url) {
+      setResolveError({
+        kind: 'torrent',
+        message:
+          'Los navegadores web bloquean las conexiones BitTorrent TCP/UDP convencionales. ' +
+          'Las fuentes P2P solo están disponibles en la app de Android.',
+        isPlatformLimit: true,
+      });
+      setResolveStatus('error');
+      return;
+    }
+
     setResolveStatus('resolving');
 
     try {
       const resolved = await resolveStreamUrl(stream);
       setResolvedUrl(resolved.url);
+      setIsIframeFallback(false);
       setResolveStatus('ready');
       if (stream.infoHash) {
         activeInfoHashRef.current = stream.infoHash;
       }
     } catch (err) {
       const resErr = err as StreamResolutionError;
+      // Fallback automático al reproductor iframe del embed original si falla la extracción web
+      if (Platform.OS === 'web' && resErr.kind === 'embed' && stream.url) {
+        setResolvedUrl(stream.url);
+        setIsIframeFallback(true);
+        setResolveStatus('ready');
+        return;
+      }
       setResolveError(resErr);
       setResolveStatus('error');
     }
@@ -128,13 +191,98 @@ export default function PlayerScreen() {
     };
   }, []);
 
-  // La fuente que se pasa al reproductor es la URL resuelta (no stream.url directo)
-  const playableSource = resolvedUrl
+  const isHlsStream = isHlsUrl(resolvedUrl);
+  const nativeHlsSupported = canPlayHlsNatively();
+
+  // En web sin soporte nativo de HLS (Chrome, Firefox), hls.js alimenta el elemento <video>
+  // por lo que no le asignamos el .m3u8 directamente a expo-video para evitar MediaError
+  const playableSource = resolvedUrl && !isIframeFallback && !(Platform.OS === 'web' && isHlsStream && !nativeHlsSupported)
     ? {
         uri: resolvedUrl,
         headers: selectedStreamOption?.stream.behaviorHints?.proxyHeaders,
       }
     : null;
+
+  // Integración dinámica de hls.js en Web para navegadores sin soporte nativo de HLS
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    if (!resolvedUrl || isIframeFallback || isEmbedStreamUrl(resolvedUrl)) {
+      return;
+    }
+
+    if (!isHlsUrl(resolvedUrl) || canPlayHlsNatively()) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const initHls = async () => {
+      try {
+        const { default: Hls } = await import('hls.js');
+        if (!isMounted) return;
+
+        if (Hls.isSupported()) {
+          const container = videoContainerRef.current as unknown as HTMLElement | null;
+          const videoEl =
+            container?.querySelector?.('video') ||
+            (typeof document !== 'undefined' ? document.querySelector('video') : null);
+
+          if (!videoEl) {
+            setTimeout(initHls, 100);
+            return;
+          }
+
+          const hls = new Hls({
+            enableWorker: true,
+            lowLatencyMode: false,
+          });
+          hlsRef.current = hls;
+
+          hls.loadSource(resolvedUrl);
+          hls.attachMedia(videoEl);
+
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            videoEl.play().catch(() => {});
+          });
+
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) {
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR:
+                  hls.startLoad();
+                  break;
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                  hls.recoverMediaError();
+                  break;
+                default:
+                  hls.destroy();
+                  break;
+              }
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error inicializando hls.js:', e);
+      }
+    };
+
+    const timer = setTimeout(initHls, 50);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [resolvedUrl, isIframeFallback]);
 
   const player = useVideoPlayer(playableSource, (p) => {
     p.loop = false;
@@ -260,13 +408,17 @@ export default function PlayerScreen() {
           )}
         </View>
       ) : resolvedUrl ? (
-        Platform.OS === 'web' && isEmbedStreamUrl(resolvedUrl) ? (
+        Platform.OS === 'web' && (isIframeFallback || isEmbedStreamUrl(resolvedUrl)) ? (
           <View style={styles.videoTouchArea}>
             <View style={styles.embedTopBar}>
               <TVFocusable style={styles.closeButton} onPress={() => router.back()}>
                 <Text style={styles.closeButtonText}>✕</Text>
               </TVFocusable>
-              <Text style={styles.embedNoticeText}>Reproduciendo vía Streamwish / Embed Web</Text>
+              <Text style={styles.embedNoticeText}>
+                {isIframeFallback
+                  ? 'Modo embed (con reproductor externo)'
+                  : 'Reproduciendo vía Embed Web'}
+              </Text>
             </View>
             <View style={styles.video}>
               <iframe
@@ -297,7 +449,7 @@ export default function PlayerScreen() {
             </Pressable>
           </View>
         ) : (
-          <Pressable style={styles.videoTouchArea} onPress={handleToggleControls}>
+          <Pressable ref={videoContainerRef} style={styles.videoTouchArea} onPress={handleToggleControls}>
             <VideoView
               style={styles.video}
               player={player}
@@ -371,6 +523,22 @@ export default function PlayerScreen() {
 
       <View style={styles.sourcesContainer}>
         <Text style={styles.sourcesTitle}>Fuentes disponibles</Text>
+
+        {Platform.OS === 'web' && (
+          <View style={styles.webCompatBox}>
+            <View style={styles.webCompatHeader}>
+              <Text style={styles.webCompatCount}>
+                ✓ {streamOptions.length} {streamOptions.length === 1 ? 'fuente compatible' : 'fuentes compatibles'} con Web
+              </Text>
+            </View>
+            {hiddenTorrentsCount > 0 && (
+              <Text style={styles.webP2pNoticeText}>
+                Las fuentes P2P solo están disponibles en la app de Android ({hiddenTorrentsCount} {hiddenTorrentsCount === 1 ? 'fuente torrent oculta' : 'fuentes torrent ocultas'}).
+              </Text>
+            )}
+          </View>
+        )}
+
         <ScrollView>
           {streamOptions.map((option) => {
             const kind = getStreamKind(option.stream);
@@ -404,7 +572,13 @@ export default function PlayerScreen() {
                       : styles.kindBadgeTorrent,
                   ]}>
                     <Text style={styles.kindBadgeText}>
-                      {kind === 'embed' ? '🟣 EMBED' : kind === 'http' ? '🔵 HTTP' : '🟠 P2P'}
+                      {kind === 'embed'
+                        ? '🟣 EMBED'
+                        : kind === 'http'
+                        ? '🔵 HTTP'
+                        : Platform.OS === 'web'
+                        ? '⚠️ P2P (Nativo/Debrid)'
+                        : '🟠 P2P'}
                     </Text>
                   </View>
                 </View>
@@ -715,5 +889,42 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 6,
     marginRight: 12,
+  },
+  webNoticeBox: {
+    backgroundColor: '#0F1E2E',
+    borderColor: '#1C3A54',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  webNoticeText: {
+    color: '#8EC5FC',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  webCompatBox: {
+    backgroundColor: '#0A1826',
+    borderColor: '#183852',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  webCompatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  webCompatCount: {
+    color: '#64B5F6',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  webP2pNoticeText: {
+    color: '#FFB74D',
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 16,
   },
 });
