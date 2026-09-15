@@ -92,6 +92,79 @@ const DEFAULT_ADDONS: Addon[] = [
       p2p: true,
     },
     active: true
+  },
+  // MediaFusion (instancia publica ElfHosted): addon universal de torrents y debrid.
+  // Ofrece streams para peliculas, series y TV en vivo. Alternativa a Torrentio
+  // con mayor cobertura internacional y soporte de más tipos de contenido.
+  {
+    manifestUrl: 'https://mediafusion.elfhosted.com/manifest.json',
+    id: 'stremio.addons.mediafusion|elfhosted',
+    name: 'MediaFusion',
+    version: '6.1.6',
+    types: ['movie', 'series', 'tv', 'events'],
+    resources: [
+      'catalog',
+      {
+        name: 'stream',
+        types: ['movie', 'series', 'tv', 'events'],
+        idPrefixes: ['tt', 'tmdb:', 'tvdb:', 'mal:', 'mf', 'dl'],
+      },
+      {
+        name: 'meta',
+        types: ['movie', 'series', 'tv', 'events'],
+        idPrefixes: ['mf', 'dl'],
+      },
+    ],
+    idPrefixes: ['tt', 'tmdb:', 'tvdb:', 'mal:', 'mf', 'dl'],
+    catalogs: [],
+    behaviorHints: {
+      configurable: true,
+      configurationRequired: false,
+      adult: false,
+      p2p: true,
+    },
+    active: true
+  },
+  // Anime Kitsu: addon oficial para catálogo y metadatos de anime (Kitsu.io).
+  // Provee el catálogo completo de animes (Trending, Airing, Popular, Rating)
+  // con temporadas, episodios y sus IDs (kitsu:1234:1) para vincular con streams.
+  {
+    manifestUrl: 'https://anime-kitsu.strem.fun/manifest.json',
+    id: 'community.anime.kitsu',
+    name: 'Anime Kitsu',
+    version: '0.0.10',
+    types: ['anime', 'movie', 'series'],
+    resources: ['catalog', 'meta', 'subtitles'],
+    idPrefixes: ['kitsu', 'mal', 'anilist', 'anidb'],
+    catalogs: [
+      {
+        id: 'kitsu-anime-trending',
+        type: 'anime',
+        name: 'Kitsu Trending',
+      },
+      {
+        id: 'kitsu-anime-airing',
+        type: 'anime',
+        name: 'Kitsu Top Airing',
+      },
+      {
+        id: 'kitsu-anime-popular',
+        type: 'anime',
+        name: 'Kitsu Most Popular',
+      },
+      {
+        id: 'kitsu-anime-rating',
+        type: 'anime',
+        name: 'Kitsu Highest Rated',
+      },
+    ],
+    behaviorHints: {
+      configurable: false,
+      configurationRequired: false,
+      adult: false,
+      p2p: false,
+    },
+    active: true,
   }
 ];
 
@@ -224,12 +297,20 @@ export const useAddonsStore = create<AddonsState>()(
     {
       name: 'freeview-addons-storage',
       storage: createJSONStorage(() => AsyncStorage),
-      version: 4,
+      version: 6,
       migrate: (persistedState, version) => {
-        // v4: agrega Torrentio como addon de streams por defecto.
-        // Si la version guardada es menor a 4, reseteamos a defaults.
-        if (!persistedState || version < 4) {
-          return { addons: DEFAULT_ADDONS };
+        // v6: agrega Anime Kitsu como catálogo de anime por defecto.
+        // v5: agrega MediaFusion como addon de streams/catalogo por defecto.
+        // v4: agrego Torrentio como addon de streams por defecto.
+        if (!persistedState || version < 6) {
+          const existing = (persistedState as PersistedAddonsState)?.addons || [];
+          const merged = [...DEFAULT_ADDONS];
+          for (const a of existing) {
+            if (!merged.some(m => m.manifestUrl === a.manifestUrl)) {
+              merged.push(a);
+            }
+          }
+          return { addons: merged };
         }
 
         const state = persistedState as PersistedAddonsState;

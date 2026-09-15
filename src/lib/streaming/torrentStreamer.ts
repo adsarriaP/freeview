@@ -8,10 +8,11 @@
 
 import { Platform } from 'react-native';
 import { Stream } from '../addons/types';
+import { releaseActiveTorrent, resolveViaTorrent } from './webtorrentResolver';
 
 // --- Tipos publicos ---
 
-export type StreamKind = 'http' | 'torrent';
+export type StreamKind = 'http' | 'torrent' | 'embed';
 
 export interface ResolvedStream {
   url: string;
@@ -28,8 +29,33 @@ export interface StreamResolutionError {
 
 // --- Helpers ---
 
-/** Detecta si el Stream trae URL directa o infoHash (torrent). */
+/** Detecta si una URL corresponde a un servicio de video embed (Streamwish, Filemoon, etc.) */
+export function isEmbedStreamUrl(url?: string | null): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes('streamwish.') ||
+    lower.includes('filemoon.') ||
+    lower.includes('vidhide.') ||
+    lower.includes('streamtape.') ||
+    lower.includes('doodstream.') ||
+    lower.includes('dood.') ||
+    lower.includes('voe.sx') ||
+    lower.includes('uqload.') ||
+    lower.includes('mixdrop.') ||
+    lower.includes('luluvdo.') ||
+    lower.includes('lulustream.') ||
+    lower.includes('wolfstream.') ||
+    lower.includes('waaw.') ||
+    lower.includes('netu.') ||
+    lower.includes('/e/') ||
+    lower.includes('/embed')
+  );
+}
+
+/** Detecta si el Stream trae URL directa, embed o infoHash (torrent). */
 export function getStreamKind(stream: Stream): StreamKind {
+  if (stream.url && isEmbedStreamUrl(stream.url)) return 'embed';
   if (stream.url) return 'http';
   if (stream.infoHash) return 'torrent';
   return 'http';
@@ -43,116 +69,21 @@ export function formatSize(bytes?: number): string | null {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
-// --- WebTorrent (solo web) ---
-
-/** Mapa de infoHash > cleanup para liberar recursos al salir del reproductor. */
-const activeTorrents = new Map<string, () => void>();
-
-/**
- * Intenta resolver un stream de torrent via WebTorrent (solo disponible en web).
- * Devuelve una URL object/blob reproducible o lanza un error.
- */
-async function resolveViaTorrent(stream: Stream): Promise<string> {
-  if (!stream.infoHash) {
-    throw new Error('Stream no tiene infoHash');
-  }
-
-  // Importar WebTorrent dinamicamente para evitar que falle en nativo
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let WebTorrent: any;
-  try {
-    const mod = await import('webtorrent');
-    WebTorrent = mod.default ?? mod;
-  } catch {
-    throw new Error(
-      'WebTorrent no esta instalado. Ejecuta: npx expo install webtorrent'
-    );
-  }
-
-  const magnetUri = buildMagnetUri(stream);
-
-  return new Promise<string>((resolve, reject) => {
-    const client = new WebTorrent();
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        client.destroy();
-        reject(new Error('Tiempo de espera agotado: sin peers disponibles'));
-      }
-    }, 30_000);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    client.add(magnetUri, (torrent: any) => {
-      const fileIdx = stream.fileIdx ?? 0;
-      const file = torrent.files[fileIdx];
-
-      if (!file) {
-        clearTimeout(timeout);
-        settled = true;
-        client.destroy();
-        reject(new Error(`Archivo ${fileIdx} no encontrado en el torrent`));
-        return;
-      }
-
-      file.getBlobURL((err: Error | null, url?: string) => {
-        clearTimeout(timeout);
-        if (settled) return;
-        settled = true;
-
-        if (err || !url) {
-          client.destroy();
-          reject(err ?? new Error('No se pudo crear blob URL'));
-          return;
-        }
-
-        // Guardar funcion de limpieza asociada al infoHash
-        activeTorrents.set(stream.infoHash!, () => {
-          try { client.destroy(); } catch { /* ignorar */ }
-        });
-
-        resolve(url);
-      });
-    });
-
-    client.on('error', (err: Error) => {
-      clearTimeout(timeout);
-      if (!settled) {
-        settled = true;
-        reject(err);
-      }
-    });
-  });
-}
-
-/** Construye un magnet URI desde un infoHash con trackers publicos. */
-function buildMagnetUri(stream: Stream): string {
-  const hash = stream.infoHash!;
-  const trackers = [
-    'udp://tracker.opentrackr.org:1337/announce',
-    'udp://open.stealth.si:80/announce',
-    'udp://tracker.torrent.eu.org:451/announce',
-    'udp://open.demonii.com:1337/announce',
-  ];
-  const trs = trackers.map((t) => `&tr=${encodeURIComponent(t)}`).join('');
-  return `magnet:?xt=urn:btih:${hash}${trs}`;
-}
-
 // --- API publica ---
 
 /**
  * Resuelve un Stream a una URL reproducible.
- * - HTTP: resuelve inmediatamente.
+ * - HTTP directo o Embed: resuelve inmediatamente.
  * - Torrent en web: usa WebTorrent (puede tardar 5-30s conectando peers).
  * - Torrent en nativo: rechaza con isPlatformLimit = true.
  *
  * @throws StreamResolutionError
  */
 export async function resolveStreamUrl(stream: Stream): Promise<ResolvedStream> {
-  // HTTP directo
+  // HTTP directo o Embed
   if (stream.url) {
-    return { url: stream.url, kind: 'http' };
+    const kind = isEmbedStreamUrl(stream.url) ? 'embed' : 'http';
+    return { url: stream.url, kind };
   }
 
   // Torrent
@@ -196,9 +127,5 @@ export async function resolveStreamUrl(stream: Stream): Promise<ResolvedStream> 
  * Llamar en el cleanup del useEffect del reproductor.
  */
 export function releaseTorrent(infoHash: string): void {
-  const cleanup = activeTorrents.get(infoHash);
-  if (cleanup) {
-    cleanup();
-    activeTorrents.delete(infoHash);
-  }
+  releaseActiveTorrent(infoHash);
 }

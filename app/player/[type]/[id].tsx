@@ -7,11 +7,13 @@ import { ActivityIndicator, Platform, Pressable, SafeAreaView, ScrollView, Style
 import { TVFocusable } from '../../../src/components/tv/TVFocusable';
 import { useStreams } from '../../../src/hooks/useStreams';
 import { supportsResource } from '../../../src/lib/addons/filter';
+import * as WebBrowser from 'expo-web-browser';
 import { Stream } from '../../../src/lib/addons/types';
 import {
   StreamResolutionError,
   formatSize,
   getStreamKind,
+  isEmbedStreamUrl,
   releaseTorrent,
   resolveStreamUrl,
 } from '../../../src/lib/streaming/torrentStreamer';
@@ -258,71 +260,109 @@ export default function PlayerScreen() {
           )}
         </View>
       ) : resolvedUrl ? (
-        <Pressable style={styles.videoTouchArea} onPress={handleToggleControls}>
-          <VideoView
-            style={styles.video}
-            player={player}
-            nativeControls={false}
-          />
+        Platform.OS === 'web' && isEmbedStreamUrl(resolvedUrl) ? (
+          <View style={styles.videoTouchArea}>
+            <View style={styles.embedTopBar}>
+              <TVFocusable style={styles.closeButton} onPress={() => router.back()}>
+                <Text style={styles.closeButtonText}>✕</Text>
+              </TVFocusable>
+              <Text style={styles.embedNoticeText}>Reproduciendo vía Streamwish / Embed Web</Text>
+            </View>
+            <View style={styles.video}>
+              <iframe
+                src={resolvedUrl}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  border: 'none',
+                  backgroundColor: '#000',
+                }}
+                allowFullScreen
+                scrolling="no"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              />
+            </View>
+          </View>
+        ) : isEmbedStreamUrl(resolvedUrl) && Platform.OS !== 'web' ? (
+          <View style={styles.selectHintContainer}>
+            <Text style={styles.resolveErrorText}>📺 Fuente Embed / Web</Text>
+            <Text style={styles.resolveSubText}>
+              Este stream proviene de un reproductor web ({resolvedUrl.includes('streamwish') ? 'Streamwish' : 'Embed'}). Puedes abrirlo en el navegador o usar la versión Web de Freeview.
+            </Text>
+            <Pressable
+              style={styles.retryButton}
+              onPress={() => WebBrowser.openBrowserAsync(resolvedUrl)}
+            >
+              <Text style={styles.retryButtonText}>Abrir en Navegador</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable style={styles.videoTouchArea} onPress={handleToggleControls}>
+            <VideoView
+              style={styles.video}
+              player={player}
+              nativeControls={false}
+            />
 
-          {showControls && (
-            <View style={styles.controlsOverlay} pointerEvents="box-none">
-              <SafeAreaView style={styles.topControls}>
-                <TVFocusable style={styles.closeButton} onPress={() => router.back()}>
-                  <Text style={styles.closeButtonText}>✕</Text>
-                </TVFocusable>
-              </SafeAreaView>
+            {showControls && (
+              <View style={styles.controlsOverlay} pointerEvents="box-none">
+                <SafeAreaView style={styles.topControls}>
+                  <TVFocusable style={styles.closeButton} onPress={() => router.back()}>
+                    <Text style={styles.closeButtonText}>✕</Text>
+                  </TVFocusable>
+                </SafeAreaView>
 
-              <View style={styles.centerControls}>
-                <TVFocusable style={styles.playPauseButton} onPress={handleTogglePlay}>
-                  <Text style={styles.playPauseButtonText}>{isPlaying ? '⏸' : '▶'}</Text>
-                </TVFocusable>
-              </View>
-
-              <View style={styles.bottomControls}>
-                {subtitles.length > 0 && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.subtitlesRow}>
-                    <Pressable
-                      style={[styles.subtitleChip, !selectedSubtitleId && styles.subtitleChipSelected]}
-                      onPress={() => setSelectedSubtitleId(null)}
-                    >
-                      <Text style={styles.subtitleChipText}>Sin subtitulos</Text>
-                    </Pressable>
-                    {subtitles.map((sub) => (
-                      <Pressable
-                        key={sub.id}
-                        style={[styles.subtitleChip, selectedSubtitleId === sub.id && styles.subtitleChipSelected]}
-                        onPress={() => setSelectedSubtitleId(sub.id)}
-                      >
-                        <Text style={styles.subtitleChipText}>{sub.lang}</Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                )}
-                {selectedSubtitleId ? (
-                  <Text style={styles.subtitleDisclaimer}>
-                    Subtitulos externos aun no soportados por el reproductor nativo.
-                  </Text>
-                ) : null}
-
-                <View style={styles.timeRow}>
-                  <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
-                  <Text style={styles.timeText}>{formatTime(duration)}</Text>
+                <View style={styles.centerControls}>
+                  <TVFocusable style={styles.playPauseButton} onPress={handleTogglePlay}>
+                    <Text style={styles.playPauseButtonText}>{isPlaying ? '⏸' : '▶'}</Text>
+                  </TVFocusable>
                 </View>
 
-                <Pressable
-                  style={styles.seekBarContainer}
-                  onLayout={(e) => setSeekBarWidth(e.nativeEvent.layout.width)}
-                  onPress={(e) => handleSeek(e.nativeEvent.locationX)}
-                >
-                  <View style={styles.seekBarTrack}>
-                    <View style={[styles.seekBarFill, { width: `${progressPercent}%` }]} />
+                <View style={styles.bottomControls}>
+                  {subtitles.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.subtitlesRow}>
+                      <Pressable
+                        style={[styles.subtitleChip, !selectedSubtitleId && styles.subtitleChipSelected]}
+                        onPress={() => setSelectedSubtitleId(null)}
+                      >
+                        <Text style={styles.subtitleChipText}>Sin subtitulos</Text>
+                      </Pressable>
+                      {subtitles.map((sub) => (
+                        <Pressable
+                          key={sub.id}
+                          style={[styles.subtitleChip, selectedSubtitleId === sub.id && styles.subtitleChipSelected]}
+                          onPress={() => setSelectedSubtitleId(sub.id)}
+                        >
+                          <Text style={styles.subtitleChipText}>{sub.lang}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                  {selectedSubtitleId ? (
+                    <Text style={styles.subtitleDisclaimer}>
+                      Subtitulos externos aun no soportados por el reproductor nativo.
+                    </Text>
+                  ) : null}
+
+                  <View style={styles.timeRow}>
+                    <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
+                    <Text style={styles.timeText}>{formatTime(duration)}</Text>
                   </View>
-                </Pressable>
+
+                  <Pressable
+                    style={styles.seekBarContainer}
+                    onLayout={(e) => setSeekBarWidth(e.nativeEvent.layout.width)}
+                    onPress={(e) => handleSeek(e.nativeEvent.locationX)}
+                  >
+                    <View style={styles.seekBarTrack}>
+                      <View style={[styles.seekBarFill, { width: `${progressPercent}%` }]} />
+                    </View>
+                  </Pressable>
+                </View>
               </View>
-            </View>
-          )}
-        </Pressable>
+            )}
+          </Pressable>
+        )
       ) : (
         <View style={styles.selectHintContainer}>
           <Text style={styles.selectHintText}>Selecciona una fuente para comenzar la reproduccion.</Text>
@@ -357,10 +397,14 @@ export default function PlayerScreen() {
                   <Text style={styles.sourceAddon}>{option.addonName}</Text>
                   <View style={[
                     styles.kindBadge,
-                    kind === 'http' ? styles.kindBadgeHttp : styles.kindBadgeTorrent,
+                    kind === 'embed'
+                      ? styles.kindBadgeEmbed
+                      : kind === 'http'
+                      ? styles.kindBadgeHttp
+                      : styles.kindBadgeTorrent,
                   ]}>
                     <Text style={styles.kindBadgeText}>
-                      {kind === 'http' ? '🔵 HTTP' : '🟠 P2P'}
+                      {kind === 'embed' ? '🟣 EMBED' : kind === 'http' ? '🔵 HTTP' : '🟠 P2P'}
                     </Text>
                   </View>
                 </View>
@@ -547,6 +591,9 @@ const styles = StyleSheet.create({
   kindBadgeTorrent: {
     backgroundColor: '#3A2200',
   },
+  kindBadgeEmbed: {
+    backgroundColor: '#4A154B',
+  },
   kindBadgeText: {
     color: '#fff',
     fontSize: 10,
@@ -648,5 +695,25 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 20,
     fontWeight: 'bold',
+  },
+  embedTopBar: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    right: 10,
+    zIndex: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    pointerEvents: 'box-none',
+  },
+  embedNoticeText: {
+    color: '#E6F4FE',
+    fontSize: 12,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginRight: 12,
   },
 });
