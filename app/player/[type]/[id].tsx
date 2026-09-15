@@ -2,12 +2,19 @@ import { useEvent } from 'expo';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { TVFocusable } from '../../../src/components/tv/TVFocusable';
 import { useStreams } from '../../../src/hooks/useStreams';
 import { supportsResource } from '../../../src/lib/addons/filter';
 import { Stream } from '../../../src/lib/addons/types';
+import {
+  StreamResolutionError,
+  formatSize,
+  getStreamKind,
+  releaseTorrent,
+  resolveStreamUrl,
+} from '../../../src/lib/streaming/torrentStreamer';
 import { useAddonsStore } from '../../../src/store/addonsStore';
 
 interface StreamOption {
@@ -41,8 +48,19 @@ export default function PlayerScreen() {
   const activeAddons = addons.filter(a => a.active);
   const activeStreamAddons = activeAddons.filter((addon) => supportsResource(addon, 'stream'));
   const decodedId = decodeParamId(id || '');
+
+  // ID de la opcion seleccionada en la lista de fuentes
   const [selectedStreamId, setSelectedStreamId] = useState<string | null>(null);
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(null);
+
+  // Estado de resolucion del stream seleccionado
+  type ResolveStatus = 'idle' | 'resolving' | 'ready' | 'error';
+  const [resolveStatus, setResolveStatus] = useState<ResolveStatus>('idle');
+  const [resolveError, setResolveError] = useState<StreamResolutionError | null>(null);
+  // URL resuelta lista para pasarle al reproductor
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  // infoHash activo para liberar el torrent al desmontar o cambiar fuente
+  const activeInfoHashRef = useRef<string | null>(null);
 
   const { data: streamGroups, isLoading, isError } = useStreams(type, decodedId);
 
@@ -55,24 +73,64 @@ export default function PlayerScreen() {
   }, []);
 
   const streamOptions = useMemo<StreamOption[]>(() => {
-    if (!streamGroups) {
-      return [];
-    }
+    if (!streamGroups) return [];
 
     return streamGroups.flatMap((group, groupIndex) =>
-      group.streams.map((stream, streamIndex) => ({
-        id: `${group.addonName}-${groupIndex}-${streamIndex}`,
-        addonName: group.addonName,
-        stream,
-      }))
+      group.streams
+        // En web, ocultar fuentes marcadas como notWebReady
+        .filter((stream) => !(Platform.OS === 'web' && stream.behaviorHints?.notWebReady))
+        .map((stream, streamIndex) => ({
+          id: `${group.addonName}-${groupIndex}-${streamIndex}`,
+          addonName: group.addonName,
+          stream,
+        }))
     );
   }, [streamGroups]);
 
   const selectedStreamOption = streamOptions.find((option) => option.id === selectedStreamId) ?? null;
-  const playableSource = selectedStreamOption?.stream.url
+
+  // Resolver el stream seleccionado de forma async cuando cambia la seleccion
+  const handleSelectStream = useCallback(async (optionId: string, stream: Stream) => {
+    // Liberar torrent anterior si existia
+    if (activeInfoHashRef.current) {
+      releaseTorrent(activeInfoHashRef.current);
+      activeInfoHashRef.current = null;
+    }
+
+    setSelectedStreamId(optionId);
+    setSelectedSubtitleId(null);
+    setResolvedUrl(null);
+    setResolveError(null);
+    setResolveStatus('resolving');
+
+    try {
+      const resolved = await resolveStreamUrl(stream);
+      setResolvedUrl(resolved.url);
+      setResolveStatus('ready');
+      if (stream.infoHash) {
+        activeInfoHashRef.current = stream.infoHash;
+      }
+    } catch (err) {
+      const resErr = err as StreamResolutionError;
+      setResolveError(resErr);
+      setResolveStatus('error');
+    }
+  }, []);
+
+  // Liberar torrent al desmontar el reproductor
+  useEffect(() => {
+    return () => {
+      if (activeInfoHashRef.current) {
+        releaseTorrent(activeInfoHashRef.current);
+      }
+    };
+  }, []);
+
+  // La fuente que se pasa al reproductor es la URL resuelta (no stream.url directo)
+  const playableSource = resolvedUrl
     ? {
-        uri: selectedStreamOption.stream.url,
-        headers: selectedStreamOption.stream.behaviorHints?.proxyHeaders,
+        uri: resolvedUrl,
+        headers: selectedStreamOption?.stream.behaviorHints?.proxyHeaders,
       }
     : null;
 
@@ -175,7 +233,31 @@ export default function PlayerScreen() {
 
   return (
     <View style={styles.container}>
-      {selectedStreamOption?.stream.url ? (
+      {/* Area de video: muestra estado de resolucion o el video una vez listo */}
+      {resolveStatus === 'resolving' ? (
+        <View style={styles.selectHintContainer}>
+          <ActivityIndicator size="large" color="#E6F4FE" style={{ marginBottom: 12 }} />
+          <Text style={styles.selectHintText}>Conectando a la fuente...</Text>
+          <Text style={styles.resolveSubText}>
+            {selectedStreamOption?.stream.infoHash
+              ? 'Buscando peers del torrent. Puede tardar hasta 30s.'
+              : 'Resolviendo URL de stream...'}
+          </Text>
+        </View>
+      ) : resolveStatus === 'error' ? (
+        <View style={styles.selectHintContainer}>
+          <Text style={styles.resolveErrorText}>⚠ No se pudo reproducir esta fuente</Text>
+          <Text style={styles.resolveSubText}>{resolveError?.message}</Text>
+          {selectedStreamOption && (
+            <Pressable
+              style={styles.retryButton}
+              onPress={() => handleSelectStream(selectedStreamOption.id, selectedStreamOption.stream)}
+            >
+              <Text style={styles.retryButtonText}>Reintentar</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : resolvedUrl ? (
         <Pressable style={styles.videoTouchArea} onPress={handleToggleControls}>
           <VideoView
             style={styles.video}
@@ -251,30 +333,44 @@ export default function PlayerScreen() {
         <Text style={styles.sourcesTitle}>Fuentes disponibles</Text>
         <ScrollView>
           {streamOptions.map((option) => {
-            const isPlayable = Boolean(option.stream.url);
+            const kind = getStreamKind(option.stream);
             const isSelected = option.id === selectedStreamId;
             const streamName = option.stream.name || option.stream.title || option.stream.description || 'Fuente sin nombre';
-            const streamDescription = option.stream.description || (option.stream.infoHash ? 'Torrent (requiere servidor)' : null);
+            const streamDescription = option.stream.description && option.stream.description !== streamName
+              ? option.stream.description
+              : null;
+            const sizeLabel = formatSize(option.stream.size);
+            const seedsLabel = option.stream.seeds != null ? `${option.stream.seeds} seeds` : null;
 
             return (
               <Pressable
                 key={option.id}
                 style={({ pressed }) => [
                   styles.sourceItem,
-                  !isPlayable && styles.sourceItemDisabled,
                   isSelected && styles.sourceItemSelected,
-                  pressed && isPlayable && styles.sourceItemPressed,
+                  pressed && styles.sourceItemPressed,
                 ]}
-                onPress={() => {
-                  if (!isPlayable) return;
-                  setSelectedStreamId(option.id);
-                  setSelectedSubtitleId(null);
-                }}
-                disabled={!isPlayable}
+                onPress={() => handleSelectStream(option.id, option.stream)}
               >
-                <Text style={styles.sourceAddon}>{option.addonName}</Text>
+                {/* Fila superior: addon + badge de tipo */}
+                <View style={styles.sourceHeaderRow}>
+                  <Text style={styles.sourceAddon}>{option.addonName}</Text>
+                  <View style={[
+                    styles.kindBadge,
+                    kind === 'http' ? styles.kindBadgeHttp : styles.kindBadgeTorrent,
+                  ]}>
+                    <Text style={styles.kindBadgeText}>
+                      {kind === 'http' ? '🔵 HTTP' : '🟠 P2P'}
+                    </Text>
+                  </View>
+                </View>
                 <Text style={styles.sourceName}>{streamName}</Text>
                 {streamDescription ? <Text style={styles.sourceDescription}>{streamDescription}</Text> : null}
+                {/* Metadata de disponibilidad */}
+                <View style={styles.sourceMetaRow}>
+                  {sizeLabel ? <Text style={styles.sourceMeta}>{sizeLabel}</Text> : null}
+                  {seedsLabel ? <Text style={styles.sourceMeta}>{seedsLabel}</Text> : null}
+                </View>
               </Pressable>
             );
           })}
@@ -427,11 +523,34 @@ const styles = StyleSheet.create({
   sourceItemPressed: {
     opacity: 0.85,
   },
+  sourceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
   sourceAddon: {
     color: '#E6F4FE',
     fontSize: 12,
     fontWeight: '700',
-    marginBottom: 4,
+    flexShrink: 1,
+    marginRight: 6,
+  },
+  kindBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  kindBadgeHttp: {
+    backgroundColor: '#0D2F4F',
+  },
+  kindBadgeTorrent: {
+    backgroundColor: '#3A2200',
+  },
+  kindBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
   },
   sourceName: {
     color: '#fff',
@@ -442,6 +561,41 @@ const styles = StyleSheet.create({
     color: '#A0A0A0',
     fontSize: 12,
     marginTop: 4,
+  },
+  sourceMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  sourceMeta: {
+    color: '#666',
+    fontSize: 11,
+  },
+  resolveErrorText: {
+    color: '#F4A0A0',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  resolveSubText: {
+    color: '#888',
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 12,
+  },
+  retryButton: {
+    backgroundColor: '#E6F4FE',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 15,
   },
   errorText: {
     color: '#ff4444',

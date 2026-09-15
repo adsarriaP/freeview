@@ -26,10 +26,12 @@
     "react-native-screens": "~4.26.0",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1",
+    "webtorrent": "^3.0.21",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "@types/webtorrent": "^3.0.0",
     "typescript": "~6.0.3"
   },
   "scripts": {

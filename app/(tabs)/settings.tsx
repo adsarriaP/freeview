@@ -1,6 +1,30 @@
 import { useState } from 'react';
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Clipboard, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { supportsResource } from '../../src/lib/addons/filter';
 import { useAddonsStore } from '../../src/store/addonsStore';
+
+// Addons populares del ecosistema Stremio para sugerir al usuario
+const SUGGESTED_ADDONS = [
+  {
+    name: 'Torrentio',
+    url: 'https://torrentio.strem.fun/manifest.json',
+    description: 'El addon de streams mas popular. Devuelve fuentes P2P (torrents). Con debrid, devuelve links HTTP directos.',
+    isP2P: true,
+  },
+  {
+    name: 'Torrentio (configurado con debrid)',
+    url: 'https://torrentio.strem.fun/providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,horriblesubs,nyaasi,tokyotosho,anidex/debridoptions=nodownloadlinks,nocatalog/realdebrid=TU_API_KEY/manifest.json',
+    description: 'Reemplaza TU_API_KEY con tu clave de Real-Debrid para obtener links HTTP directos.',
+    isP2P: false,
+  },
+  {
+    name: 'Opensubtitles V3',
+    url: 'https://opensubtitles-v3.strem.io/manifest.json',
+    description: 'Addon oficial de subtitulos. Proporciona subtitulos en multiples idiomas para peliculas y series.',
+    isP2P: false,
+  },
+];
+
 
 export default function SettingsScreen() {
   const { addons, addAddon, removeAddon, toggleAddon, resetToDefaults } = useAddonsStore();
@@ -65,6 +89,26 @@ export default function SettingsScreen() {
                     <Text style={styles.addonVersion}>v{addon.version}</Text>
                   </View>
                   <Text style={styles.addonUrl} numberOfLines={1}>{addon.manifestUrl}</Text>
+
+                  {/* Badges de capacidades del addon */}
+                  <View style={styles.capabilitiesRow}>
+                    {supportsResource(addon, 'catalog') && (
+                      <View style={styles.capBadge}>
+                        <Text style={styles.capBadgeText}>📋 Catálogo</Text>
+                      </View>
+                    )}
+                    {supportsResource(addon, 'meta') && (
+                      <View style={styles.capBadge}>
+                        <Text style={styles.capBadgeText}>🎥 Meta</Text>
+                      </View>
+                    )}
+                    {supportsResource(addon, 'stream') && (
+                      <View style={[styles.capBadge, styles.capBadgeStream]}>
+                        <Text style={styles.capBadgeText}>▶️ Streams</Text>
+                      </View>
+                    )}
+                  </View>
+
                   {addon.types.length > 0 ? (
                     <View style={styles.typesRow}>
                       {addon.types.map((type) => (
@@ -124,6 +168,35 @@ export default function SettingsScreen() {
           >
             <Text style={styles.resetButtonText}>Restaurar addons por defecto</Text>
           </Pressable>
+        </View>
+
+        {/* Addons sugeridos */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Addons sugeridos</Text>
+          <Text style={styles.suggestedNote}>
+            Toca el manifest para copiarlo y pegarlo en el campo de arriba.
+          </Text>
+          {SUGGESTED_ADDONS.map((suggestion) => (
+            <Pressable
+              key={suggestion.url}
+              style={({ pressed }) => [styles.suggestionItem, pressed && styles.buttonPressed]}
+              onPress={() => {
+                Clipboard.setString(suggestion.url);
+                Alert.alert('Copiado', `URL de ${suggestion.name} copiada al portapapeles.`);
+              }}
+            >
+              <View style={styles.suggestionHeader}>
+                <Text style={styles.suggestionName}>{suggestion.name}</Text>
+                {suggestion.isP2P && (
+                  <View style={styles.dangerBadge}>
+                    <Text style={styles.dangerBadgeText}>P2P</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.suggestionDesc}>{suggestion.description}</Text>
+              <Text style={styles.suggestionUrl} numberOfLines={1}>{suggestion.url}</Text>
+            </Pressable>
+          ))}
         </View>
         <View style={styles.bottomPadding} />
       </ScrollView>
@@ -322,6 +395,67 @@ const styles = StyleSheet.create({
     color: '#E6F4FE',
     fontSize: 14,
     fontWeight: '600',
+  },
+  // Badges de capacidades del addon (catalogo / meta / streams)
+  capabilitiesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+    marginBottom: 2,
+  },
+  capBadge: {
+    backgroundColor: '#1A2A1A',
+    borderColor: '#3A6B3A',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  capBadgeStream: {
+    backgroundColor: '#0D2540',
+    borderColor: '#2A5FA0',
+  },
+  capBadgeText: {
+    color: '#A8E6A8',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  // Seccion de addons sugeridos
+  suggestedNote: {
+    color: '#666',
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  suggestionItem: {
+    backgroundColor: '#0D0D0D',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    padding: 14,
+    marginBottom: 10,
+  },
+  suggestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  suggestionName: {
+    color: '#E6F4FE',
+    fontSize: 14,
+    fontWeight: '700',
+    flex: 1,
+  },
+  suggestionDesc: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  suggestionUrl: {
+    color: '#444',
+    fontSize: 10,
+    fontFamily: 'monospace' as const,
   },
   bottomPadding: {
     height: 80,

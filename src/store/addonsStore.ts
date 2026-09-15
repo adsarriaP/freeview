@@ -20,6 +20,8 @@ export interface Addon {
     configurationRequired?: boolean;
   };
   active: boolean;
+  /** undefined = no verificado aun, true = accesible, false = inalcanzable */
+  reachable?: boolean;
 }
 
 interface PersistedAddonsState {
@@ -33,10 +35,11 @@ interface AddonsState {
   toggleAddon: (url: string) => void;
   getActiveAddons: () => Addon[];
   resetToDefaults: () => void;
+  /** Verifica en background si cada addon responde y activa solo los que funcionan */
+  validateAndActivateAddons: () => Promise<void>;
 }
 
-// Default public domain addon (Cinemeta is usually default for Stremio, 
-// but we'll use a placeholder or let user add them. We can add Cinemeta as default)
+// Default public domain addon (Cinemeta es el addon de metadatos oficial de Stremio)
 const DEFAULT_ADDONS: Addon[] = [
   {
     manifestUrl: 'https://v3-cinemeta.strem.io/manifest.json',
@@ -65,6 +68,28 @@ const DEFAULT_ADDONS: Addon[] = [
       configurationRequired: false,
       adult: false,
       p2p: false,
+    },
+    active: true
+  },
+  // Torrentio: addon de streams más popular del ecosistema Stremio.
+  // Devuelve streams con infoHash (P2P) y, cuando se configura con debrid,
+  // también links HTTP directos. En web, los torrents se resuelven via WebTorrent.
+  {
+    manifestUrl: 'https://torrentio.strem.fun/manifest.json',
+    id: 'com.torrentio',
+    name: 'Torrentio',
+    version: '0.0.14',
+    types: ['movie', 'series', 'anime', 'other'],
+    resources: [
+      { name: 'stream', types: ['movie', 'series', 'anime', 'other'], idPrefixes: ['tt', 'kitsu'] }
+    ],
+    idPrefixes: ['tt', 'kitsu'],
+    catalogs: [],
+    behaviorHints: {
+      configurable: true,
+      configurationRequired: false,
+      adult: false,
+      p2p: true,
     },
     active: true
   }
@@ -156,14 +181,54 @@ export const useAddonsStore = create<AddonsState>()(
       resetToDefaults: () => {
         // reemplaza cualquier entrada corrupta/desactualizada por los addons validos por defecto
         set({ addons: DEFAULT_ADDONS });
-      }
+      },
+      validateAndActivateAddons: async () => {
+        const { addons } = get();
+        // Verificamos todos los addons en paralelo con un timeout de 8s
+        const results = await Promise.allSettled(
+          addons.map(async (addon) => {
+            try {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 8000);
+              const response = await fetch(addon.manifestUrl, {
+                method: 'HEAD',
+                signal: controller.signal,
+              });
+              clearTimeout(timeoutId);
+              return { url: addon.manifestUrl, reachable: response.ok };
+            } catch {
+              return { url: addon.manifestUrl, reachable: false };
+            }
+          })
+        );
+
+        // Actualizar el estado con los resultados de validacion
+        set((state) => ({
+          addons: state.addons.map((addon) => {
+            const result = results.find(
+              (r) => r.status === 'fulfilled' && r.value.url === addon.manifestUrl
+            );
+            const reachable =
+              result?.status === 'fulfilled' ? result.value.reachable : false;
+            return {
+              ...addon,
+              reachable,
+              // Activar automaticamente si el addon es alcanzable,
+              // desactivar solo si se confirma inalcanzable (no afecta addons configurados a mano)
+              active: reachable,
+            };
+          }),
+        }));
+      },
     }),
     {
       name: 'freeview-addons-storage',
       storage: createJSONStorage(() => AsyncStorage),
-      version: 3,
+      version: 4,
       migrate: (persistedState, version) => {
-        if (!persistedState || version < 3) {
+        // v4: agrega Torrentio como addon de streams por defecto.
+        // Si la version guardada es menor a 4, reseteamos a defaults.
+        if (!persistedState || version < 4) {
           return { addons: DEFAULT_ADDONS };
         }
 

@@ -70,8 +70,14 @@ export interface Stream {
   name?: string;
   description?: string;
   url?: string;
+  // Torrent (P2P)
   infoHash?: string;
   fileIdx?: number;
+  // Métricas de disponibilidad reportadas por el addon (ej. Torrentio)
+  seeds?: number;
+  peers?: number;
+  // Tamaño del archivo en bytes
+  size?: number;
   subtitles?: { id: string; url: string; lang: string }[];
   behaviorHints?: {
     notWebReady?: boolean;
